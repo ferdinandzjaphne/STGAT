@@ -8,6 +8,10 @@ import numpy as np
 from model.stgat import STGAT
 from loss.MSELoss import mse_loss
 from loss.MAPELoss import MAPELoss
+from torch.utils.tensorboard import SummaryWriter
+import logging
+import os
+import sys
 
 parser = argparse.ArgumentParser()
 # parser.add_argument('--graph_signal_matrix_filename', type=str, default='data/METR-LA/data2.npz')
@@ -29,6 +33,7 @@ parser.add_argument('--opt', type=str, default='adam')
 parser.add_argument('--graph', type=str, default='default')
 parser.add_argument('--adjtype', type=str, default='symnadj')
 parser.add_argument('--early_stop_maxtry', type=int, default=20)
+parser.add_argument('--module_name', type=str, default='urban-core')
 parser.add_argument('--cuda', action='store_true', help='use CUDA training.')
 
 args = parser.parse_args()
@@ -88,7 +93,29 @@ def main():
     loss_function = nn.SmoothL1Loss()
     b_xent = nn.BCEWithLogitsLoss()
 
-    print("start training...",flush=True)
+    run_id = 'stgat_%s_%d_%s/' % (args.module_name, args.batch_size, time.strftime('%m%d%H%M%S'))
+    writer = SummaryWriter('runs/' + run_id)
+
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+
+    log_dir = os.path.join("logs", run_id)
+    
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    file_handler = logging.FileHandler(os.path.join(log_dir, 'info.log'))
+    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    # Add google cloud log handler
+    logger.info('Log directory: %s', run_id)
+    
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    logger.info("start training...")
     his_loss =[]
     val_time = []
     train_time = []
@@ -96,7 +123,7 @@ def main():
     mmin_epoch = 10000
     trycnt = 0
 
-
+    batches_seen = 0
 
     for i in range(args.epoch):
         
@@ -106,6 +133,7 @@ def main():
         train_mape = []
         train_rmse = []
         t1 = time.time()
+
         for iter, (trainx, trainy, trainx_) in enumerate(dataloader['train_loader']):
             optimizer.zero_grad()
 
@@ -162,19 +190,21 @@ def main():
             train_mape.append(mape)
             train_rmse.append(rmse)
 
+            batches_seen += 1
+
             loss.backward()
             # torch.nn.utils.clip_grad_norm_(net.parameters(), 5)
             optimizer.step()
-            
 
+            
             if iter % args.print_every == 0 :
                 log = 'Iter: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}'
-                print(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]), flush=True)
+                logger.info(log.format(iter, train_loss[-1], train_mape[-1], train_rmse[-1]))
             # if iter>10:
             #         break
             break
-        
 
+        
         t2 = time.time()
         train_time.append(t2-t1)
 
@@ -209,7 +239,7 @@ def main():
 
             s2 = time.time()
             log = 'Epoch: {:03d}, Inference Time: {:.4f} secs'
-            print(log.format(i,(s2-s1)))
+            logger.info(log.format(i,(s2-s1)))
 
             val_time.append(s2-s1)
             mtrain_loss = np.mean(train_loss)
@@ -222,12 +252,20 @@ def main():
             his_loss.append(mvalid_loss)
 
             log = 'Epoch: {:03d}, Train Loss: {:.4f}, Train MAPE: {:.4f}, Train RMSE: {:.4f}, Valid Loss: {:.4f}, Valid MAPE: {:.4f}, Valid RMSE: {:.4f}, Training Time: {:.4f}/epoch'
-            print(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)),flush=True)
+            logger.info(log.format(i, mtrain_loss, mtrain_mape, mtrain_rmse, mvalid_loss, mvalid_mape, mvalid_rmse, (t2 - t1)))
+
+            writer.add_scalar('Loss/Train_MAE', mtrain_loss, batches_seen)
+            writer.add_scalar('Loss/Train_MAPE', mtrain_mape, batches_seen)
+            writer.add_scalar('Loss/Train_RMSE', mtrain_rmse, batches_seen)
+
+            writer.add_scalar('Loss/Val_MAE', mvalid_loss, batches_seen)
+            writer.add_scalar('Loss/Val_MAPE', mvalid_mape, batches_seen)
+            writer.add_scalar('Loss/Val_RMSE', mvalid_rmse, batches_seen)
 
             # lr_scheduler.step(mvalid_loss)
             # lr_scheduler.step()
 
-            # torch.save(net, args.params_dir+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth")
+            torch.save(net, os.path.join("models", args.params_dir+"_epoch_"+str(i)+"_"+str(round(mvalid_loss,2))+".pth"))
             if mmin_val_loss > mvalid_loss:
                 mmin_val_loss = mvalid_loss
                 mmin_epoch = i
@@ -245,11 +283,11 @@ def main():
                 output = output.permute(0, 3, 1, 2)
                 output = output.squeeze()
 
-                print('test', output.shape, testy[:,0,:,:].shape)
                 outputs.append(output)
                 realy.append(testy[:,0,:,:].squeeze())
                 # if iter>10:
                 #     break
+            
 
             yhat = torch.cat(outputs, dim=0)
             realy = torch.cat(realy, dim=0)
@@ -257,7 +295,7 @@ def main():
                 yhat = yhat.cuda()
                 realy = realy.cuda()
 
-            print("Training finished")
+            logger.info("Training finished")
 
             amae = []
             amape = []
@@ -267,26 +305,69 @@ def main():
                 real = scaler.inverse_transform(realy[:,:,i])
                 metrics = util.metric(pred,real)
                 log = 'Evaluate best model on test data for horizon {:d}, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
-                print(log.format(i+1, metrics[0], metrics[1], metrics[2]))
+                logger.info(log.format(i+1, metrics[0], metrics[1], metrics[2]))
                 amae.append(metrics[0])
                 amape.append(metrics[1])
                 armse.append(metrics[2])
 
+            saved_pred = pred
+            saved_real = real
+
+            
             log = 'On average over 12 horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
-            print(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
-            print('early stop trycnt:', trycnt, mmin_epoch)
-            print('==================================================================================')
-            print('\r\n\r\n\r\n')
+            logger.info(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
+            logger.info('early stop trycnt: .%d .%d', trycnt, mmin_epoch)
+            logger.info('==================================================================================')
+            logger.info('\r\n\r\n\r\n')
+
+            
+            for i in range(6):
+                pred = scaler.inverse_transform(yhat[:,:,i])
+                real = scaler.inverse_transform(realy[:,:,i])
+                metrics = util.metric(pred,real)
+                log = 'Evaluate best model on test data for horizon {:d}, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+                logger.info(log.format(i+1, metrics[0], metrics[1], metrics[2]))
+                amae.append(metrics[0])
+                amape.append(metrics[1])
+                armse.append(metrics[2])
+
+            
+            log = 'On average over 6 horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+            logger.info(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
+            logger.info('early stop trycnt: .%d .%d', trycnt, mmin_epoch)
+            logger.info('==================================================================================')
+            logger.info('\r\n\r\n\r\n')
+            
+            
+            for i in range(3):
+                pred = scaler.inverse_transform(yhat[:,:,i])
+                real = scaler.inverse_transform(realy[:,:,i])
+                metrics = util.metric(pred,real)
+                log = 'Evaluate best model on test data for horizon {:d}, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+                logger.info(log.format(i+1, metrics[0], metrics[1], metrics[2]))
+                amae.append(metrics[0])
+                amape.append(metrics[1])
+                armse.append(metrics[2])
+
+            
+            log = 'On average over 3 horizons, Test MAE: {:.4f}, Test MAPE: {:.4f}, Test RMSE: {:.4f}'
+            logger.info(log.format(np.mean(amae),np.mean(amape),np.mean(armse)))
+            logger.info('early stop trycnt: .%d .%d', trycnt, mmin_epoch)
+            logger.info('==================================================================================')
+            logger.info('\r\n\r\n\r\n')
+
             
             # for early stop
             trycnt += 1
             if args.early_stop_maxtry < trycnt:
+                data = {'prediction': saved_pred, 'truth': saved_real}
+                np.savez_compressed('results/result_prediction.npz', **data)    
                 print('early stop!')
                 return
 
 
-    print("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
-    print("Average Inference Time: {:.4f} secs".format(np.mean(val_time)))
+    logger.info("Average Training Time: {:.4f} secs/epoch".format(np.mean(train_time)))
+    logger.info("Average Inference Time: {:.4f} secs".format(np.mean(val_time)))
 
 if __name__ == "__main__":
     t1 = time.time()

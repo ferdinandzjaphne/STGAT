@@ -20,3 +20,8 @@ If you find this repository, e.g., the code and the datasets, useful in your res
   publisher={IEEE}
 }
 ```
+python train.py --data='data/urban-core/' --adj_filename='data/urban-core/adj_generate.pkl' --num_of_vertices=304 --num_of_features=1 --module='urban-core' --params_dir='model-urban-core' --cuda=true
+python testing.py --data='data/urban-core/' --adj_filename='data/urban-core/adj_generate.pkl' --num_of_vertices=304 --num_of_features=1 --cuda=true
+
+python train.py --data='data/urban-mix/' --adj_filename='data/urban-mix/adj_generate.pkl' --num_of_vertices=1007 --num_of_features=1 --module='urban-mix' --params_dir='model-urban-mix'
+python testing.py --data='data/urban-core/' --adj_filename='data/urban-mix/adj_generate.pkl' --num_of_vertices=1007 --num_of_features=1

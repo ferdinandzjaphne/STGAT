@@ -8,6 +8,8 @@ import numpy as np
 from model.stgat2_testing import STGAT, STGATModel
 from loss.MSELoss import mse_loss
 from loss.MAPELoss import MAPELoss
+import matplotlib.pyplot as plt
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data', type=str, default='data/METR-LA/')
@@ -49,6 +51,15 @@ def weight_schedule(epoch, max_val=10, mult=-5, max_epochs=100):
     return w
 
 def main():
+    # b = np.load('results/result_prediction.npz')
+    # print(b)
+    # plt.plot(b['prediction'][0], label="prediction")
+    # plt.plot(b['truth'][0], label="ground truth")
+    # plt.legend()
+    # plt.savefig('result.png')
+
+    # return
+
     #set seed
     #torch.manual_seed(args.seed)
     #np.random.seed(args.seed)
